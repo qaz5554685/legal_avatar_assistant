@@ -24,6 +24,7 @@ ABOUT_TEXT = """您好，這是法務分身官方帳號。運用 AI 技術自動
 
 WAITING_UPLOAD_MESSAGE = "請上傳欲進行 {review_label} 的 Word 檔案"
 ANALYZING_MESSAGE = "法務分身正在幫您分析，預計需要 1~2 分鐘，請稍候片刻..."
+LINE_TEXT_LIMIT = 5000
 
 # Temporary in-memory state for ngrok/local testing.
 # TODO: Replace with Redis or database storage for multi-process production deploys.
@@ -158,7 +159,10 @@ async def _handle_file(event: MessageEvent, message: FileMessageContent) -> None
     _pending_review_by_target.pop(target_id, None)
 
     async with LineClient(LINE_CHANNEL_ACCESS_TOKEN) as client:
-        await client.push(target_id, [LineClient.build_text(result)])
+        await client.push(
+            target_id,
+            [LineClient.build_text(part) for part in _split_line_text(result)],
+        )
 
     LOGGER.info(
         "[_handle_file] target=%s filename=%s saved=%s review_type=%s",
@@ -174,3 +178,24 @@ async def _save_uploaded_file(content: bytes, original_filename: str, target_id:
     upload_path = UPLOAD_DIR / f"{target_id}_{uuid.uuid4().hex}_{safe_filename}"
     await asyncio.to_thread(upload_path.write_bytes, content)
     return upload_path
+
+
+def _split_line_text(text: str) -> list[str]:
+    if not text:
+        return ["分析完成，但沒有產生文字結果。"]
+
+    chunks: list[str] = []
+    remaining = text.strip()
+    while remaining:
+        if len(remaining) <= LINE_TEXT_LIMIT:
+            chunks.append(remaining)
+            break
+
+        split_at = remaining.rfind("\n", 0, LINE_TEXT_LIMIT)
+        if split_at < LINE_TEXT_LIMIT // 2:
+            split_at = LINE_TEXT_LIMIT
+
+        chunks.append(remaining[:split_at].strip())
+        remaining = remaining[split_at:].strip()
+
+    return chunks
